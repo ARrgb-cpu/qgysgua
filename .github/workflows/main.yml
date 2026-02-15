@@ -1,4 +1,4 @@
-name: RDP-4GB-GPU-FIXED-FINAL
+name: RDP-4GB-GPU-EMULATED
 on:
   workflow_dispatch:
 
@@ -15,20 +15,21 @@ jobs:
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: 2. Enable 4GB GPU (Registry Only)
+      - name: 2. Install Mesa 3D (Software GPU)
         run: |
-          # কোনো এক্সটারনাল ড্রাইভার ছাড়াই 4GB VRAM সেট করা
-          $paths = @("HKLM:\SOFTWARE\Microsoft\DirectX", "HKLM:\SOFTWARE\Intel\GMM")
-          foreach ($p in $paths) {
-              if (!(Test-Path $p)) { New-Item $p -Force }
-              New-ItemProperty -Path $p -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
-              New-ItemProperty -Path $p -Name "DedicatedSegmentSize" -Value 4096 -PropertyType DWORD -Force
-          }
+          # We use a reliable mirror for the Mesa LLVMpipe driver
+          # This acts as a 'Virtual GPU' for apps that need OpenGL/DirectX
+          choco install mesa-dist-win -y --no-progress
+          
+          # Force Windows to see 4GB VRAM in the reporting tool
+          $regPath = "HKLM:\SOFTWARE\Microsoft\DirectX"
+          if (!(Test-Path $regPath)) { New-Item $regPath -Force }
+          New-ItemProperty -Path $regPath -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
+          Write-Host "Software GPU driver installed."
 
       - name: 3. Create User & Connect Tailscale
         shell: powershell
         run: |
-          # Create User
           $pass = "P@ssw0rd4GB!"
           $sec = ConvertTo-SecureString $pass -AsPlainText -Force
           if (!(Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
@@ -36,11 +37,10 @@ jobs:
             Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           }
 
-          # Direct Tailscale Install (Bypassing Choco)
+          # Direct Tailscale Install
           Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi"
           Start-Process msiexec.exe -ArgumentList "/i", "ts.msi", "/quiet", "/norestart" -Wait
           
-          # Fix for Parser Error: Use variable for path and single-line command
           $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
           & $tsPath up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes
           
@@ -48,7 +48,7 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "IP=$ip"
           Add-Content -Path $env:GITHUB_ENV -Value "PASS=$pass"
 
-      - name: 4. Display Login Details
+      - name: 4. Final Connection Info
         run: |
           Write-Host "=============================="
           Write-Host "IP Address: $env:IP"
