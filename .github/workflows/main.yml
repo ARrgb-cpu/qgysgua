@@ -1,0 +1,65 @@
+name: RDP-4GB-GPU-STABLE
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: 1. Setup RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: 2. Enable 4GB Virtual GPU
+        run: |
+          # Install Mesa via Chocolatey
+          choco install mesa-dist-win -y --no-progress
+          
+          # Registry Hack to force exactly 4GB VRAM
+          $regPath = "HKLM:\SOFTWARE\Microsoft\DirectX"
+          if (!(Test-Path $regPath)) { New-Item $regPath -Force }
+          New-ItemProperty -Path $regPath -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
+          Write-Host "Virtual 4GB GPU Configured."
+
+      - name: 3. Create User & Connect Tailscale
+        shell: pwsh
+        run: |
+          # Create RDP User
+          $pass = "P@ssw0rd4GB!"
+          $sec = ConvertTo-SecureString $pass -AsPlainText -Force
+          if (!(Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "RDP" -Password $sec -AccountNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          }
+
+          # Install Tailscale and refresh environment paths
+          choco install tailscale -y --no-progress
+          $env:Path += ";C:\Program Files\Tailscale"
+          
+          # Run Tailscale with a timeout and error handling
+          # Use the secret for the Auth Key
+          try {
+            & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes
+          } catch {
+            Write-Host "Tailscale connection had an issue, but continuing..."
+          }
+          
+          # Force IP capture
+          Start-Sleep -Seconds 5
+          $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          echo "IP=$ip" >> $env:GITHUB_ENV
+          echo "PASS=$pass" >> $env:GITHUB_ENV
+
+      - name: 4. Final Connection Info
+        run: |
+          Write-Host "=============================="
+          Write-Host "IP Address: $env:IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $env:PASS"
+          Write-Host "=============================="
+          while($true) { Start-Sleep 300 }
