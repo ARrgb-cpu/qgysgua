@@ -1,4 +1,4 @@
-name: RDP-4GB-STABLE-FINAL
+name: RDP-4GB-FINAL-FORCE
 on:
   workflow_dispatch:
 
@@ -15,21 +15,21 @@ jobs:
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: 2. Enable 4GB Virtual GPU
+      - name: 2. Force 4GB GPU Registry Injection
         run: |
-          # Install Mesa (built-in to runner environment)
-          choco install mesa-dist-win -y --no-progress || exit 0
-          
-          # Registry Hack for 4GB VRAM
-          $regPath = "HKLM:\SOFTWARE\Microsoft\DirectX"
-          if (!(Test-Path $regPath)) { New-Item $regPath -Force }
-          New-ItemProperty -Path $regPath -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
-          Write-Host "Virtual 4GB GPU Configured."
+          # কোনো ড্রাইভার ইন্সটল ছাড়াই সরাসরি রেজিস্ট্রি থেকে GPU বুস্ট
+          $regPaths = @("HKLM:\SOFTWARE\Microsoft\DirectX", "HKLM:\SOFTWARE\Intel\GMM")
+          foreach ($path in $regPaths) {
+              if (!(Test-Path $path)) { New-Item $path -Force }
+              # 4GB = 4294967296 Bytes
+              New-ItemProperty -Path $path -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
+          }
+          Write-Host "Hardware Profile set to 4GB GPU."
 
-      - name: 3. Create User & Connect Tailscale
-        shell: pwsh
+      - name: 3. Setup User & Connect Tailscale
+        shell: powershell
         run: |
-          # 1. Create User
+          # ইউজার তৈরি
           $pass = "P@ssw0rd4GB!"
           $sec = ConvertTo-SecureString $pass -AsPlainText -Force
           if (!(Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
@@ -37,26 +37,22 @@ jobs:
             Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           }
 
-          # 2. Install Tailscale
-          choco install tailscale -y --no-progress
+          # সরাসরি Tailscale ডাউনলোড এবং ইন্সটল (Choco ছাড়া)
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi"
+          Start-Process msiexec.exe -ArgumentList "/i", "ts.msi", "/quiet", "/norestart" -Wait
           
-          # 3. Refresh Path and Start
-          $env:Path += ";C:\Program Files\Tailscale"
+          # কানেকশন কমান্ড (এক লাইনে যাতে Parser Error না আসে)
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes
           
-          # Use 'continue-on-error' logic manually
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes || Write-Host "Tailscale warning ignored."
-          
-          # 4. Capture IP (Wait 10 seconds for network to stabilize)
-          Start-Sleep -Seconds 10
           $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-          echo "IP=$ip" >> $env:GITHUB_ENV
-          echo "PASS=$pass" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "IP=$ip"
+          Add-Content -Path $env:GITHUB_ENV -Value "PASS=$pass"
 
       - name: 4. Final Connection Info
         run: |
           Write-Host "=============================="
-          Write-Host "IP Address: $env:IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $env:PASS"
+          Write-Host "IP: $env:IP"
+          Write-Host "User: RDP"
+          Write-Host "Pass: $env:PASS"
           Write-Host "=============================="
           while($true) { Start-Sleep 300 }
