@@ -1,4 +1,4 @@
-name: RDP-4GB-FINAL-FORCE
+name: RDP-4GB-GPU-FIXED-FINAL
 on:
   workflow_dispatch:
 
@@ -15,21 +15,20 @@ jobs:
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: 2. Force 4GB GPU Registry Injection
+      - name: 2. Enable 4GB GPU (Registry Only)
         run: |
-          # কোনো ড্রাইভার ইন্সটল ছাড়াই সরাসরি রেজিস্ট্রি থেকে GPU বুস্ট
-          $regPaths = @("HKLM:\SOFTWARE\Microsoft\DirectX", "HKLM:\SOFTWARE\Intel\GMM")
-          foreach ($path in $regPaths) {
-              if (!(Test-Path $path)) { New-Item $path -Force }
-              # 4GB = 4294967296 Bytes
-              New-ItemProperty -Path $path -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
+          # কোনো এক্সটারনাল ড্রাইভার ছাড়াই 4GB VRAM সেট করা
+          $paths = @("HKLM:\SOFTWARE\Microsoft\DirectX", "HKLM:\SOFTWARE\Intel\GMM")
+          foreach ($p in $paths) {
+              if (!(Test-Path $p)) { New-Item $p -Force }
+              New-ItemProperty -Path $p -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
+              New-ItemProperty -Path $p -Name "DedicatedSegmentSize" -Value 4096 -PropertyType DWORD -Force
           }
-          Write-Host "Hardware Profile set to 4GB GPU."
 
-      - name: 3. Setup User & Connect Tailscale
+      - name: 3. Create User & Connect Tailscale
         shell: powershell
         run: |
-          # ইউজার তৈরি
+          # Create User
           $pass = "P@ssw0rd4GB!"
           $sec = ConvertTo-SecureString $pass -AsPlainText -Force
           if (!(Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
@@ -37,22 +36,23 @@ jobs:
             Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           }
 
-          # সরাসরি Tailscale ডাউনলোড এবং ইন্সটল (Choco ছাড়া)
+          # Direct Tailscale Install (Bypassing Choco)
           Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi"
           Start-Process msiexec.exe -ArgumentList "/i", "ts.msi", "/quiet", "/norestart" -Wait
           
-          # কানেকশন কমান্ড (এক লাইনে যাতে Parser Error না আসে)
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes
+          # Fix for Parser Error: Use variable for path and single-line command
+          $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
+          & $tsPath up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes
           
-          $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          $ip = & $tsPath ip -4
           Add-Content -Path $env:GITHUB_ENV -Value "IP=$ip"
           Add-Content -Path $env:GITHUB_ENV -Value "PASS=$pass"
 
-      - name: 4. Final Connection Info
+      - name: 4. Display Login Details
         run: |
           Write-Host "=============================="
-          Write-Host "IP: $env:IP"
-          Write-Host "User: RDP"
-          Write-Host "Pass: $env:PASS"
+          Write-Host "IP Address: $env:IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $env:PASS"
           Write-Host "=============================="
           while($true) { Start-Sleep 300 }
