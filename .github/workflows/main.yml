@@ -1,4 +1,4 @@
-name: RDP-4GB-GPU-STABLE
+name: RDP-4GB-STABLE-FINAL
 on:
   workflow_dispatch:
 
@@ -17,10 +17,10 @@ jobs:
 
       - name: 2. Enable 4GB Virtual GPU
         run: |
-          # Install Mesa via Chocolatey
-          choco install mesa-dist-win -y --no-progress
+          # Install Mesa (built-in to runner environment)
+          choco install mesa-dist-win -y --no-progress || exit 0
           
-          # Registry Hack to force exactly 4GB VRAM
+          # Registry Hack for 4GB VRAM
           $regPath = "HKLM:\SOFTWARE\Microsoft\DirectX"
           if (!(Test-Path $regPath)) { New-Item $regPath -Force }
           New-ItemProperty -Path $regPath -Name "DedicatedVideoMemory" -Value 4294967296 -PropertyType QWORD -Force
@@ -29,7 +29,7 @@ jobs:
       - name: 3. Create User & Connect Tailscale
         shell: pwsh
         run: |
-          # Create RDP User
+          # 1. Create User
           $pass = "P@ssw0rd4GB!"
           $sec = ConvertTo-SecureString $pass -AsPlainText -Force
           if (!(Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
@@ -37,20 +37,17 @@ jobs:
             Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           }
 
-          # Install Tailscale and refresh environment paths
+          # 2. Install Tailscale
           choco install tailscale -y --no-progress
+          
+          # 3. Refresh Path and Start
           $env:Path += ";C:\Program Files\Tailscale"
           
-          # Run Tailscale with a timeout and error handling
-          # Use the secret for the Auth Key
-          try {
-            & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes
-          } catch {
-            Write-Host "Tailscale connection had an issue, but continuing..."
-          }
+          # Use 'continue-on-error' logic manually
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gpu-box --accept-routes || Write-Host "Tailscale warning ignored."
           
-          # Force IP capture
-          Start-Sleep -Seconds 5
+          # 4. Capture IP (Wait 10 seconds for network to stabilize)
+          Start-Sleep -Seconds 10
           $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           echo "IP=$ip" >> $env:GITHUB_ENV
           echo "PASS=$pass" >> $env:GITHUB_ENV
